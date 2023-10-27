@@ -2,6 +2,9 @@ import cv2
 import mediapipe as mp
 import pyautogui
 import math
+import time
+
+pyautogui.FAILSAFE = False
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands()
@@ -18,12 +21,31 @@ click_threshold = 0.10
 
 # Define a threshold for finger proximity
 # Adjust this value based on your preferred distance threshold for a click
-finger_proximity_threshold = 70
+finger_proximity_threshold = 45
 
 fingertip_landmarks = [4, 8, 12, 16, 20]  # Landmark indices for fingertips
 
 # Initialize a state variable to keep track of click
 click_triggered = False
+scroll_triggered = False
+
+frames_without_detection = 1000
+frames_required_for_scroll = 30
+scroll_direction = 0
+scrolled = True
+frames_since_scroll = 0
+scroll_dist_threshold = 125
+
+# Variables to track hand positions
+prev_x, prev_y = 0, 0
+
+# Constants for scroll speed control
+MAX_SCROLL_SPEED = 250
+SCROLL_SENSITIVITY = 10  # Adjust sensitivity as needed
+
+# Initialize variables for cursor position and EMA smoothing
+cursor_position = (0, 0)
+alpha = 0.6  # Smoothing factor (adjust as needed)
 
 # Set the display window to full screen
 cv2.namedWindow('Hand Tracking', cv2.WND_PROP_FULLSCREEN)
@@ -73,8 +95,16 @@ while True:
             screen_x = int(index_tip_x * screen_width / frame.shape[1])
             screen_y = int(index_tip_y * screen_height / frame.shape[0])
 
+            # Apply EMA to smooth the cursor position
+            new_x, new_y = screen_x, screen_y
+            cursor_position = (
+                int((1 - alpha) * cursor_position[0] + alpha * new_x),
+                int((1 - alpha) * cursor_position[1] + alpha * new_y)
+            )
+
             # Move the cursor to the fingertip position
-            pyautogui.moveTo(screen_x, screen_y, _pause=False)
+            pyautogui.moveTo(
+                cursor_position[0], cursor_position[1], _pause=False)
 
             fingertip_coordinates = []
 
@@ -107,7 +137,7 @@ while True:
                     pyautogui.mouseUp()
                     click_triggered = False
 
-            print(f"Index Tip Depth: {distances}")
+            # print(f"Index Tip Depth: {distances}")
 
             # if abs(index_tip_depth) > click_threshold:
             #     # Simulate a click when the index fingertip gets closer to the screen
@@ -115,6 +145,42 @@ while True:
 
             # # Print the depth value of the index fingertip
             # print(f"Index Tip Depth: {index_tip_depth}")
+
+        distance = index_tip_y - prev_y
+
+        # print(f"Distance: {distance}")
+
+        if abs(distance) > scroll_dist_threshold and frames_since_scroll > 5:
+            scrolled = False
+            if index_tip_y > prev_y:
+                # Hand moved down, scroll up
+                scroll_direction = 1
+                cv2.putText(frame, "Scroll Up", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            else:
+                # Hand moved up, scroll down
+                scroll_direction = -1
+                cv2.putText(frame, "Scroll Down", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            scroll_speed = int(abs(distance)/10)
+            scroll_speed = min(scroll_speed, MAX_SCROLL_SPEED)
+
+        prev_x, prev_y = index_tip_x, index_tip_y
+        frames_without_detection = 0
+        frames_since_scroll += 1
+
+    else:
+        frames_without_detection += 1
+
+    if frames_without_detection <= frames_required_for_scroll:
+        if not scrolled:
+            if scroll_direction != 0:
+                for s in range(SCROLL_SENSITIVITY):
+                    pyautogui.scroll(
+                        int(scroll_direction*scroll_speed), _pause=False)
+                    scrolled = True
+                    frames_since_scroll = 0
+                    time.sleep(0.01)
 
     cv2.imshow('Hand Tracking', frame)
 
