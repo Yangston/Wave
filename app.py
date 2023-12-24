@@ -84,7 +84,7 @@ def main():
 
     global hold
     hold = [0]*NUM_SIGNS
-    hold_length = 5
+    hold_length = 10
 
     # Camera preparation ###############################################################
     cap = cv.VideoCapture(cap_device)
@@ -138,6 +138,7 @@ def main():
         histColour = (152, 251, 152)
         histSize = 1
         histBorder = 2
+        hold = [0 for _ in hold]
         if handedness.classification[0].label[0:] == "Right":
             triggered = False
 
