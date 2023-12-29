@@ -2,6 +2,14 @@
 Hand gesture detection software that allows you to control your computer with a wave of your hand
 
 # UPDATE NOTES
+DEC 28
+
+- added 10,000+ sets of training data
+- added 7 new hand gestures
+- added cusor follow, click, hold and scroll functionalities.
+
+
+
 DEC 23
 
 Revamped neural net architecture; greatly improved model accuracy, precision, and F1 score
