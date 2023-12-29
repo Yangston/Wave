@@ -1,2 +1,0 @@
-from model.signDetection.signDetector import signDetector
-from model.actionDetection.actionDetector import actionDetector
