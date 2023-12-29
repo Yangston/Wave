@@ -54,7 +54,7 @@ def main():
 
     # Scroll Variables
     MAX_SCROLL_SPEED = 250
-    scroll_dist_threshold = 0.5
+    scroll_dist_threshold = 0.4
     scroll_direction = 0
     SCROLL_SENSITIVITY = 10  # Adjust sensitivity as needed
     prev_y = 0
@@ -109,7 +109,7 @@ def main():
 
     # Program Variables ________________________________________________
     # History
-    recentSign = 0
+    recentSigns = [0]*2
     history_length = 32
     point_history = deque(maxlen=history_length)
 
@@ -227,14 +227,12 @@ def main():
         hold[hand_sign_id] += 1
 
     def scrollHandDown():
-        print(recentSign, " ", toScroll)
-        if recentSign == hand_sign_index[scrollHandUp] and toScroll:
+        if recentSigns[0] == hand_sign_index[scrollHandUp] and toScroll:
             scroll(scroll_direction, scroll_speed)
         resetSigns()
 
     def scrollHandUp():
-        print(recentSign, " ", toScroll)
-        if recentSign == hand_sign_index[scrollHandDown] and toScroll:
+        if recentSigns[0] == hand_sign_index[scrollHandDown] and toScroll:
             scroll(scroll_direction, scroll_speed)
         resetSigns()
 
@@ -369,7 +367,10 @@ def main():
 
                 # Triggers hand sign functions
                 hand_sign_functions[hand_sign_id]()
-                recentSign = hand_sign_id
+
+                if (recentSigns[1] != hand_sign_id):
+                    recentSigns[0] = recentSigns[1]
+                    recentSigns[1] = hand_sign_id
                 # point_history.append(landmark_list[8])
 
                 # Hand Actions______________________________________________________________
@@ -392,7 +393,7 @@ def main():
                 index_tip = hand_landmarks.landmark[8]
                 distance = index_tip.y - prev_y
 
-                print(f"Distance: {distance}")
+                # print(f"Distance: {distance}")
 
                 if abs(distance) > scroll_dist_threshold:
                     toScroll = True
@@ -406,7 +407,7 @@ def main():
                         scroll_direction = -1
                         cv.putText(image, "Scroll Down", (50, 50),
                                    cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    scroll_speed = int(abs(distance)/10)
+                    scroll_speed = int(abs(distance*1000)/10)
                     scroll_speed = min(scroll_speed, MAX_SCROLL_SPEED)
 
                 prev_y = index_tip.y
