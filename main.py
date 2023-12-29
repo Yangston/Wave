@@ -66,7 +66,7 @@ while True:
     frame = cv2.flip(frame, 1)
 
     # Set frame size to match screen size
-    frame = cv2.resize(frame, (screen_width, screen_height))
+    # frame = cv2.resize(frame, (screen_width, screen_height))
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(frame_rgb)
@@ -101,6 +101,9 @@ while True:
             int((1 - alpha) * cursor_position[0] + alpha * new_x),
             int((1 - alpha) * cursor_position[1] + alpha * new_y)
         )
+
+        print(screen_x, " ", index_tip_x, " ",
+              screen_width, " ", frame.shape[1])
 
         # Move the cursor to the fingertip position
         pyautogui.moveTo(
