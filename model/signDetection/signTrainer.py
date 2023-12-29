@@ -15,7 +15,7 @@ training_history_path = 'model/signDetection/training_history.npz'
 tflite_save_path = 'model/signDetection/signDetector.tflite'
 
 # Key Variables
-NUM_CLASSES = 7
+NUM_CLASSES = 14
 RANDOM_SEED = 42
 
 # Data Prep

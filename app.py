@@ -1,97 +1,80 @@
-import csv
-import copy
-import argparse
+# Standard Library Imports
 import itertools
 import subprocess
+import csv
+import copy
+import time as t
 from collections import Counter
 from collections import deque
 
+# Third-Party Library Imports
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
-
 import pyautogui as pyag
-import math as m
-import time as t
-
 from playsound import playsound
 
+# Local Imports
 from utils import CvFpsCalc
 from model import signDetector
 from model import actionDetector
 
-# TEMP VARIABLES I AM MAKING TO MESS AROUNDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
-histColour = (152, 251, 152)
-histSize = 1
-histBorder = 2
-
-hold = 0
-triggered = False
-
-
-def get_args():
-    parser = argparse.ArgumentParser()
-
-    # Camera Feed Settings
-    parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--width", help='cap width',
-                        type=int, default=pyag.size()[0])
-    parser.add_argument("--height", help='cap height',
-                        type=int, default=pyag.size()[1])
-
-    # Detection Thresholds/Conditions
-    parser.add_argument('--use_static_image_mode', action='store_true')
-    parser.add_argument("--min_detection_confidence",
-                        help='min_detection_confidence',
-                        type=float,
-                        default=0.7)
-    parser.add_argument("--min_tracking_confidence",
-                        help='min_tracking_confidence',
-                        type=int,
-                        default=0.5)
-    parser.add_argument("--num_hands", help='num_hands', type=int, default=2)
-
-    args = parser.parse_args()
-
-    return args
-
 
 def main():
-    # Argument parsing #################################################################
-    args = get_args()
+    debug = True
+    pyag.FAILSAFE = False
 
-    cap_device = args.device
-    cap_width = args.width
-    cap_height = args.height
+    # Capture Variables _______________________________________________
+    cap_device = 0
+    cap_width = pyag.size()[0]
+    cap_height = pyag.size()[1]
+    screen_width, screen_height = pyag.size()
+    use_static_image_mode = True
 
-    use_static_image_mode = args.use_static_image_mode
-    min_detection_confidence = args.min_detection_confidence
-    min_tracking_confidence = args.min_tracking_confidence
-    num_hands = args.num_hands
+    # Detection Variables _____________________________________________
+    min_detection_confidence = 0.7
+    min_tracking_confidence = 0.5
+    num_hands = 2
 
-    use_brect = True
-
-    # TEMP VARIABLES I AM MAKING TO MESS AROUNDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
-    global triggered
-    global histColour, histSize, histBorder
-
-    NUM_SIGNS = 8
+    # Tensorflow Model Variables ______________________________________
+    NUM_SIGNS = 15
 
     hand_sign_threshold = 0.5
     finger_gesture_threshold = 0.8
     hand_sign_confidence = 0
     finger_gesture_confidence = 0
 
-    global hold
-    hold = [0]*NUM_SIGNS
-    hold_length = 10
+    # Function Variables ______________________________________________
+    # Point History
+    histColour = (152, 251, 152)
+    histSize = 2
+    histBorder = 2
 
-    # Camera preparation ###############################################################
+    cursor_position = (0, 0)
+
+    # Scroll Variables
+    MAX_SCROLL_SPEED = 250
+    scroll_dist_threshold = 0.5
+    scroll_direction = 0
+    SCROLL_SENSITIVITY = 10  # Adjust sensitivity as needed
+    prev_y = 0
+    toScroll = False
+
+    # Action Trigger Variables _______________________________________
+    domainTriggered = False
+    konTriggered = False
+    click_triggered = False
+
+    # Action Hold/Pause Variables ______________________________________
+    hold = [0]*NUM_SIGNS
+    hold_length = 5
+
+    # Camera setup ______________________________________________________
     cap = cv.VideoCapture(cap_device)
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
-    # Model load #############################################################
+    # Mediapipe prep ____________________________________________________
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
         static_image_mode=use_static_image_mode,
@@ -100,73 +83,114 @@ def main():
         min_tracking_confidence=min_tracking_confidence,
     )
 
+    # Model Initialization ____________________________________________
     keypoint_classifier = signDetector()
-
     point_history_classifier = actionDetector()
 
-    # Read labels ###########################################################
-    with open('model/signDetection/signNames.csv',
+    # File Label Reading _____________________________________________
+    signNames = 'model/signDetection/signNames.csv'
+    actionNames = 'model/actionDetection/actionNames.csv'
+
+    with open(signNames,
               encoding='utf-8-sig') as f:
         keypoint_classifier_labels = csv.reader(f)
         keypoint_classifier_labels = [
             row[0] for row in keypoint_classifier_labels
         ]
-    with open(
-            'model/actionDetection/actionNames.csv',
-            encoding='utf-8-sig') as f:
+    with open(actionNames,
+              encoding='utf-8-sig') as f:
         point_history_classifier_labels = csv.reader(f)
         point_history_classifier_labels = [
             row[0] for row in point_history_classifier_labels
         ]
 
-    # FPS Measurement ########################################################
+    # FPS Measurement _________________________________________________
     cvFpsCalc = CvFpsCalc(buffer_len=10)
 
-    # Coordinate history #################################################################
+    # Program Variables ________________________________________________
+    # History
+    recentSign = 0
     history_length = 32
     point_history = deque(maxlen=history_length)
 
-    # Finger gesture history ################################################
-    finger_gesture_history = deque(maxlen=history_length)
-
-    #  ########################################################################
+    # Mode
     mode = 0
+    signNameOffset = 10
 
-    # Sign Functions
+    # Other
+    use_brect = True
+
+    # Sign Functions__________________________________________________
     def resetSigns():
-        global histColour, histSize, histBorder, hold, triggered
+        nonlocal histColour, histSize, histBorder, hold, domainTriggered, konTriggered
         histColour = (152, 251, 152)
         histSize = 1
         histBorder = 2
         hold = [0 for _ in hold]
         if handedness.classification[0].label[0:] == "Right":
-            triggered = False
+            domainTriggered = False
+            konTriggered = False
+
+    def unknown():
+        resetSigns()
+        point_history.append([0, 0])
+
+    def middleFinger():
+        resetSigns()
 
     def openSign():
         resetSigns()
-        point_history.append(landmark_list[4])
         point_history.append(landmark_list[8])
-        point_history.append(landmark_list[12])
-        point_history.append(landmark_list[16])
-        point_history.append(landmark_list[20])
 
     def closeSign():
-        point_history.append(landmark_list[4])
-        point_history.append(landmark_list[8])
-        point_history.append(landmark_list[12])
-        point_history.append(landmark_list[16])
-        point_history.append(landmark_list[20])
         resetSigns()
 
     def pointSign():
-        global hold
-        hold = [0 for _ in hold]
+        nonlocal cursor_position
+        alpha = 0.6  # Smoothing factor
+        scaling = 1.5  # Scaling factor
+
+        index_tip = hand_landmarks.landmark[8]  # Index fingertip landmark
+        index_tip_x = int(index_tip.x * image.shape[1])
+        index_tip_y = int(index_tip.y * image.shape[0])
+
+        # Map the fingertip position to the screen coordinates
+        screen_x = int(index_tip_x * screen_width / image.shape[1])
+        screen_y = int(index_tip_y * screen_height / image.shape[0])
+
+        # Apply EMA to smooth the cursor position
+        new_x, new_y = screen_x, screen_y
+        cursor_position = (
+            int((1 - alpha) * cursor_position[0] + alpha * new_x),
+            int((1 - alpha) * cursor_position[1] + alpha * new_y)
+        )
+
+        # Translate origin to center of screen
+        cursor_position = (
+            int(cursor_position[0] - screen_width/2),
+            int(cursor_position[1] - screen_height/2)
+        )
+
+        # Scaling, preserve sign
+        if (cursor_position[0] != 0 and cursor_position[1] != 0):
+            cursor_position = (min(
+                screen_width/2, abs(scaling*cursor_position[0]))*((scaling*cursor_position[0])/abs(scaling*cursor_position[0])), min(screen_height/2, abs(scaling*cursor_position[1]))*((scaling*cursor_position[1])/abs(scaling*cursor_position[1])))
+
+        # Translate origin back to top left
+        cursor_position = (
+            int(cursor_position[0] + screen_width/2),
+            int(cursor_position[1] + screen_height/2)
+        )
+
+        # Move the cursor to the fingertip position
+        pyag.moveTo(cursor_position[0], cursor_position[1], _pause=False)
+
         point_history.append(landmark_list[8])
         resetSigns()
 
     def hollowPurpleSign():  # HollowPurple gesture
-        global histColour, histSize, histBorder, hold, triggered
-        if hold[hand_sign_id] > hold_length:
+        nonlocal histColour, histSize, histBorder, hold
+        if hold[hand_sign_id] > 0:
             resetSigns()
             point_history.append(landmark_list[8])
             histColour = (191, 0, 255)
@@ -175,77 +199,151 @@ def main():
         hold[hand_sign_id] += 1
 
     def domainExpansionSign():  # DOMAIN EXPANSION
-        global hold, triggered
-        if not triggered:
+        nonlocal hold, domainTriggered
+        if not domainTriggered:
             if hold[hand_sign_id] > hold_length:
                 resetSigns()
                 hold = [0 for _ in hold]
                 playsound('domainExpansion.mp3', block=False)
-                triggered = True
+                domainTriggered = True
             hold[hand_sign_id] += 1
 
     def peaceSign():
-        global hold
+        nonlocal hold
         if hold[hand_sign_id] > hold_length:
             hold = [0 for _ in hold]
             resetSigns()
         hold[hand_sign_id] += 1
 
     def konSign():
-        global hold
-        if hold[hand_sign_id] > hold_length:
-            hold = [0 for _ in hold]
-            playsound('kon.mp3', block=False)
-            subprocess.run(["python", "Testing/layeredWindows.py"])
-            resetSigns()
+        nonlocal hold, konTriggered
+        if not konTriggered:
+            if hold[hand_sign_id] > hold_length:
+                hold = [0 for _ in hold]
+                playsound('kon.mp3', block=False)
+                subprocess.Popen(["python", "Testing/layeredWindows.py"])
+                resetSigns()
+                konTriggered = True
         hold[hand_sign_id] += 1
 
-    def unknown():
+    def scrollHandDown():
+        print(recentSign, " ", toScroll)
+        if recentSign == hand_sign_index[scrollHandUp] and toScroll:
+            scroll(scroll_direction, scroll_speed)
         resetSigns()
-        point_history.append([0, 0])
 
-    # Hand Sign Functions
+    def scrollHandUp():
+        print(recentSign, " ", toScroll)
+        if recentSign == hand_sign_index[scrollHandDown] and toScroll:
+            scroll(scroll_direction, scroll_speed)
+        resetSigns()
+
+    def zoomFingersTgt():
+        # if recentSign == hand_sign_index[zoomFingersApart]:
+        # zoomIn()
+        resetSigns()
+
+    def zoomFingersApart():
+        # if recentSign == hand_sign_index[zoomFingersTgt]:
+        # zoomOut()
+        resetSigns()
+
+    def clickDown():
+        nonlocal click_triggered
+        if not click_triggered:
+            # Hold down the click when all other fingertips are close
+            pyag.mouseDown()
+            click_triggered = True
+        pointSign()
+
+    def clickUp():
+        nonlocal click_triggered
+        if click_triggered:
+            # Release the click when fingers move apart
+            pyag.mouseUp()
+            click_triggered = False
+        pointSign()
+
+    # Sign Functions _____________________________________________
     hand_sign_functions = {
-        0: openSign,
-        1: closeSign,
-        2: pointSign,
-        3: hollowPurpleSign,
-        4: domainExpansionSign,
-        5: peaceSign,
-        6: konSign,
-        7: unknown,
+        0: unknown,
+        1: middleFinger,
+        2: openSign,
+        3: closeSign,
+        4: pointSign,
+        5: hollowPurpleSign,
+        6: domainExpansionSign,
+        7: peaceSign,
+        8: konSign,
+        9: scrollHandDown,
+        10: scrollHandUp,
+        11: zoomFingersTgt,
+        12: zoomFingersApart,
+        13: clickDown,
+        14: clickUp
     }
+
+    hand_sign_index = {value: key for key,
+                       value in hand_sign_functions.items()}
+
+    # Action Functions _____________________________________________
+    hand_action_functions = {
+        0: unknown,
+        1: middleFinger,
+        2: openSign,
+        3: closeSign,
+        4: pointSign,
+        5: hollowPurpleSign,
+        6: domainExpansionSign,
+        7: peaceSign,
+        8: konSign,
+        9: scrollHandDown,
+        10: scrollHandUp,
+        11: zoomFingersTgt
+    }
+
+    def scroll(direction, speed):
+        nonlocal toScroll
+
+        if toScroll:
+            if direction != 0:
+                for s in range(SCROLL_SENSITIVITY):
+                    pyag.scroll(
+                        int(direction*speed), _pause=False)
+                    toScroll = False
+                    t.sleep(0.01)
 
     while True:
         fps = cvFpsCalc.get()
 
-        # Process Key (ESC: end) #################################################
+        # Key Input Detection
         key = cv.waitKey(10)
-
         if key == 27:  # ESC
             break
+
         number, mode = select_mode(key, mode)
 
-        # Camera capture #####################################################
+        # Camera capture
         ret, image = cap.read()
         if not ret:
             break
         image = cv.flip(image, 1)  # Mirror display
+
         debug_image = copy.deepcopy(image)
 
-        # Detection implementation #############################################################
-        image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        # Hand Landmark Detection
+        frame_rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        frame_rgb.flags.writeable = False
+        results = hands.process(frame_rgb)
+        frame_rgb.flags.writeable = True
 
-        image.flags.writeable = False
-        results = hands.process(image)
-        image.flags.writeable = True
-
-        #  ####################################################################
         if results.multi_hand_landmarks is not None:
             for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
                                                   results.multi_handedness):
                 # Bounding box calculation
-                brect = calc_bounding_rect(debug_image, hand_landmarks)
+                if debug:
+                    brect = calc_bounding_rect(debug_image, hand_landmarks)
+
                 # Landmark calculation
                 landmark_list = calc_landmark_list(debug_image, hand_landmarks)
 
@@ -254,51 +352,85 @@ def main():
                     landmark_list)
                 pre_processed_point_history_list = pre_process_point_history(
                     debug_image, point_history)
+
                 # Write to the dataset file
                 logging_csv(number, mode, pre_processed_landmark_list,
-                            pre_processed_point_history_list)
+                            pre_processed_point_history_list, signNameOffset)
 
+                # Hand Signs ______________________________________________________________
                 # Hand sign classification
                 hand_sign_id, hand_sign_confidence = keypoint_classifier(
                     pre_processed_landmark_list)
+
+                hand_sign_id += 1
+
                 if (hand_sign_confidence < hand_sign_threshold):
-                    hand_sign_id = 7
+                    hand_sign_id = 0
 
-                # Triggers hand sign function
+                # Triggers hand sign functions
                 hand_sign_functions[hand_sign_id]()
+                recentSign = hand_sign_id
+                # point_history.append(landmark_list[8])
 
-                # Finger gesture classification
-                finger_gesture_id = 0
+                # Hand Actions______________________________________________________________
+                # Hand action classification
+                hand_action_id = 0
                 point_history_len = len(pre_processed_point_history_list)
-                if point_history_len == (history_length * 2):
-                    finger_gesture_id, finger_gesture_confidence = point_history_classifier(
+                if point_history_len == (32 * 2):
+                    hand_action_id, finger_gesture_confidence = point_history_classifier(
                         pre_processed_point_history_list)
 
+                hand_action_id += 1
+
                 if (finger_gesture_confidence < finger_gesture_threshold):
-                    finger_gesture_id = 2
+                    hand_action_id = 0
 
-                # Calculates the gesture IDs in the latest detection
-                finger_gesture_history.append(finger_gesture_id)
-                most_common_fg_id = Counter(
-                    finger_gesture_history).most_common()
+                # Triggers action functions
+                # hand_action_functions[hand_action_id]()
 
-                # Drawing part
-                debug_image = draw_bounding_rect(use_brect, debug_image, brect)
-                debug_image = draw_landmarks(debug_image, landmark_list)
-                debug_image = draw_info_text(
-                    debug_image,
-                    brect,
-                    handedness,
-                    keypoint_classifier_labels[hand_sign_id],
-                    point_history_classifier_labels[most_common_fg_id[0][0]],
-                )
+                # Scroll Detection __________________________________________
+                index_tip = hand_landmarks.landmark[8]
+                distance = index_tip.y - prev_y
+
+                print(f"Distance: {distance}")
+
+                if abs(distance) > scroll_dist_threshold:
+                    toScroll = True
+                    if index_tip.y > prev_y:
+                        # Hand moved down, scroll up
+                        scroll_direction = 1
+                        cv.putText(image, "Scroll Up", (50, 50),
+                                   cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    else:
+                        # Hand moved up, scroll down
+                        scroll_direction = -1
+                        cv.putText(image, "Scroll Down", (50, 50),
+                                   cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    scroll_speed = int(abs(distance)/10)
+                    scroll_speed = min(scroll_speed, MAX_SCROLL_SPEED)
+
+                prev_y = index_tip.y
+
+                # Debug image drawing _______________________________________
+                if debug:
+                    debug_image = draw_bounding_rect(
+                        use_brect, debug_image, brect)
+                    debug_image = draw_landmarks(debug_image, landmark_list)
+                    debug_image = draw_info_text(
+                        debug_image,
+                        brect,
+                        handedness,
+                        keypoint_classifier_labels[hand_sign_id],
+                        point_history_classifier_labels[hand_action_id],
+                    )
         else:
             point_history.append([0, 0])
 
-        debug_image = draw_point_history(debug_image, point_history)
-        debug_image = draw_info(debug_image, fps, mode, number)
+        if debug:
+            debug_image = draw_point_history(
+                debug_image, point_history, histColour, histSize, histBorder)
+            debug_image = draw_info(debug_image, fps, mode, number)
 
-        # Screen reflection #############################################################
         cv.imshow('Hand Gesture Recognition', debug_image)
 
     cap.release()
@@ -309,11 +441,11 @@ def select_mode(key, mode):
     number = -1
     if 48 <= key <= 57:  # 0 ~ 9
         number = key - 48
-    if key == 110:  # n
+    if key == 110:  # n - Normal
         mode = 0
-    if key == 107:  # k
+    if key == 107:  # k - Sign
         mode = 1
-    if key == 104:  # h
+    if key == 104:  # h - Point History
         mode = 2
     return number, mode
 
@@ -402,14 +534,14 @@ def pre_process_point_history(image, point_history):
     return temp_point_history
 
 
-def logging_csv(number, mode, landmark_list, point_history_list):
+def logging_csv(number, mode, landmark_list, point_history_list, numberOffset):
     if mode == 0:
         pass
     if mode == 1 and (0 <= number <= 9):
         csv_path = 'model/signDetection/signData.csv'
         with open(csv_path, 'a', newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([number, *landmark_list])
+            writer.writerow([number + numberOffset, *landmark_list])
     if mode == 2 and (0 <= number <= 9):
         csv_path = 'model/actionDetection/actionData.csv'
         with open(csv_path, 'a', newline="") as f:
@@ -419,108 +551,31 @@ def logging_csv(number, mode, landmark_list, point_history_list):
 
 
 def draw_landmarks(image, landmark_point):
-    if len(landmark_point) > 0:
-        # Thumb
-        cv.line(image, tuple(landmark_point[2]), tuple(landmark_point[3]),
+    def draw_finger(start, end):
+        cv.line(image, tuple(landmark_point[start]), tuple(landmark_point[start + 1]),
                 (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[2]), tuple(landmark_point[3]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[3]), tuple(landmark_point[4]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[3]), tuple(landmark_point[4]),
+        cv.line(image, tuple(landmark_point[start]), tuple(landmark_point[start + 1]),
                 (255, 255, 255), 2)
 
-        # Index finger
-        cv.line(image, tuple(landmark_point[5]), tuple(landmark_point[6]),
+    fingers = [[2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12],
+               [13, 14, 15, 16], [17, 18, 19, 20]]
+
+    for finger in fingers:
+        for i in range(len(finger) - 1):
+            draw_finger(finger[i], finger[i + 1])
+
+    palm_connections = [(0, 1), (1, 2), (2, 5), (5, 9),
+                        (9, 13), (13, 17), (17, 0)]
+
+    for connection in palm_connections:
+        cv.line(image, tuple(landmark_point[connection[0]]), tuple(landmark_point[connection[1]]),
                 (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[5]), tuple(landmark_point[6]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[6]), tuple(landmark_point[7]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[6]), tuple(landmark_point[7]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[7]), tuple(landmark_point[8]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[7]), tuple(landmark_point[8]),
+        cv.line(image, tuple(landmark_point[connection[0]]), tuple(landmark_point[connection[1]]),
                 (255, 255, 255), 2)
 
-        # Middle finger
-        cv.line(image, tuple(landmark_point[9]), tuple(landmark_point[10]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[9]), tuple(landmark_point[10]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[10]), tuple(landmark_point[11]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[10]), tuple(landmark_point[11]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[11]), tuple(landmark_point[12]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[11]), tuple(landmark_point[12]),
-                (255, 255, 255), 2)
-
-        # Ring finger
-        cv.line(image, tuple(landmark_point[13]), tuple(landmark_point[14]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[13]), tuple(landmark_point[14]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[14]), tuple(landmark_point[15]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[14]), tuple(landmark_point[15]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[15]), tuple(landmark_point[16]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[15]), tuple(landmark_point[16]),
-                (255, 255, 255), 2)
-
-        # Little finger
-        cv.line(image, tuple(landmark_point[17]), tuple(landmark_point[18]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[17]), tuple(landmark_point[18]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[18]), tuple(landmark_point[19]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[18]), tuple(landmark_point[19]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[19]), tuple(landmark_point[20]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[19]), tuple(landmark_point[20]),
-                (255, 255, 255), 2)
-
-        # Palm
-        cv.line(image, tuple(landmark_point[0]), tuple(landmark_point[1]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[0]), tuple(landmark_point[1]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[1]), tuple(landmark_point[2]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[1]), tuple(landmark_point[2]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[2]), tuple(landmark_point[5]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[2]), tuple(landmark_point[5]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[5]), tuple(landmark_point[9]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[5]), tuple(landmark_point[9]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[9]), tuple(landmark_point[13]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[9]), tuple(landmark_point[13]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[13]), tuple(landmark_point[17]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[13]), tuple(landmark_point[17]),
-                (255, 255, 255), 2)
-        cv.line(image, tuple(landmark_point[17]), tuple(landmark_point[0]),
-                (0, 0, 0), 6)
-        cv.line(image, tuple(landmark_point[17]), tuple(landmark_point[0]),
-                (255, 255, 255), 2)
-
-    # Key Points
-    for index, landmark in enumerate(landmark_point):
-        cv.circle(image, (landmark[0], landmark[1]), 5, (255, 255, 255),
-                  -1)
-        cv.circle(image, (landmark[0], landmark[1]), 5, (0, 0, 0), 1)
+    for landmark in landmark_point:
+        cv.circle(image, tuple(landmark), 5, (255, 255, 255), -1)
+        cv.circle(image, tuple(landmark), 5, (0, 0, 0), 1)
 
     return image
 
@@ -555,11 +610,11 @@ def draw_info_text(image, brect, handedness, hand_sign_text,
     return image
 
 
-def draw_point_history(image, point_history):
+def draw_point_history(image, point_history, pointColour, pointSize, pointBorder):
     for index, point in enumerate(point_history):
         if point[0] != 0 and point[1] != 0:
-            cv.circle(image, (point[0], point[1]), 1 + int(index / 2)*histSize,
-                      histColour, histBorder)
+            cv.circle(image, (point[0], point[1]), 1 + int(index / 2)*pointSize,
+                      pointColour, pointBorder)
 
     return image
 
