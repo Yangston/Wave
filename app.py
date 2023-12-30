@@ -37,7 +37,7 @@ def main():
     num_hands = 2
 
     # Tensorflow Model Variables ______________________________________
-    NUM_SIGNS = 15
+    NUM_SIGNS = 14
 
     hand_sign_threshold = 0.5
     finger_gesture_threshold = 0.8
@@ -54,16 +54,24 @@ def main():
 
     # Scroll Variables
     MAX_SCROLL_SPEED = 250
-    scroll_dist_threshold = 0.4
+    scroll_dist_threshold = 0.3
     scroll_direction = 0
-    SCROLL_SENSITIVITY = 10  # Adjust sensitivity as needed
+    SCROLL_SENSITIVITY = 8  # Adjust sensitivity as needed
     prev_y = 0
     toScroll = False
+
+    # Cursor Follow Variables
+    alpha = 0.8  # Smoothing factor
+    scaling = 1.5  # Scaling factor
 
     # Action Trigger Variables _______________________________________
     domainTriggered = False
     konTriggered = False
     click_triggered = False
+    apartTriggered = False
+    tgtTriggered = False
+    zoomed = False
+    shrunk = False
 
     # Action Hold/Pause Variables ______________________________________
     hold = [0]*NUM_SIGNS
@@ -109,24 +117,26 @@ def main():
 
     # Program Variables ________________________________________________
     # History
-    recentSigns = [0]*2
+    recentSigns = [0]*4
     history_length = 32
     point_history = deque(maxlen=history_length)
 
     # Mode
     mode = 0
-    signNameOffset = 10
+    signNameOffset = 0
 
     # Other
     use_brect = True
 
     # Sign Functions__________________________________________________
     def resetSigns():
-        nonlocal histColour, histSize, histBorder, hold, domainTriggered, konTriggered
+        nonlocal histColour, histSize, histBorder, hold, domainTriggered, konTriggered, click_triggered
         histColour = (152, 251, 152)
         histSize = 1
         histBorder = 2
         hold = [0 for _ in hold]
+        click_triggered = False
+        pyag.mouseUp()
         if handedness.classification[0].label[0:] == "Right":
             domainTriggered = False
             konTriggered = False
@@ -146,46 +156,14 @@ def main():
         resetSigns()
 
     def pointSign():
-        nonlocal cursor_position
-        alpha = 0.6  # Smoothing factor
-        scaling = 1.5  # Scaling factor
-
-        index_tip = hand_landmarks.landmark[8]  # Index fingertip landmark
-        index_tip_x = int(index_tip.x * image.shape[1])
-        index_tip_y = int(index_tip.y * image.shape[0])
-
-        # Map the fingertip position to the screen coordinates
-        screen_x = int(index_tip_x * screen_width / image.shape[1])
-        screen_y = int(index_tip_y * screen_height / image.shape[0])
-
-        # Apply EMA to smooth the cursor position
-        new_x, new_y = screen_x, screen_y
-        cursor_position = (
-            int((1 - alpha) * cursor_position[0] + alpha * new_x),
-            int((1 - alpha) * cursor_position[1] + alpha * new_y)
-        )
-
-        # Translate origin to center of screen
-        cursor_position = (
-            int(cursor_position[0] - screen_width/2),
-            int(cursor_position[1] - screen_height/2)
-        )
-
-        # Scaling, preserve sign
-        if (cursor_position[0] != 0 and cursor_position[1] != 0):
-            cursor_position = (min(
-                screen_width/2, abs(scaling*cursor_position[0]))*((scaling*cursor_position[0])/abs(scaling*cursor_position[0])), min(screen_height/2, abs(scaling*cursor_position[1]))*((scaling*cursor_position[1])/abs(scaling*cursor_position[1])))
-
-        # Translate origin back to top left
-        cursor_position = (
-            int(cursor_position[0] + screen_width/2),
-            int(cursor_position[1] + screen_height/2)
-        )
-
-        # Move the cursor to the fingertip position
-        pyag.moveTo(cursor_position[0], cursor_position[1], _pause=False)
-
-        point_history.append(landmark_list[8])
+        nonlocal click_triggered, tgtTriggered, apartTriggered
+        if click_triggered:
+            # Release the click when fingers move apart
+            pyag.mouseUp()
+            click_triggered = False
+        tgtTriggered = False
+        apartTriggered = False
+        cursorFollow()
         resetSigns()
 
     def hollowPurpleSign():  # HollowPurple gesture
@@ -227,23 +205,31 @@ def main():
         hold[hand_sign_id] += 1
 
     def scrollHandDown():
-        if recentSigns[0] == hand_sign_index[scrollHandUp] and toScroll:
+        if recentSigns[-2] == hand_sign_index[scrollHandUp] and toScroll:
             scroll(scroll_direction, scroll_speed)
         resetSigns()
 
     def scrollHandUp():
-        if recentSigns[0] == hand_sign_index[scrollHandDown] and toScroll:
+        if recentSigns[-2] == hand_sign_index[scrollHandDown] and toScroll:
             scroll(scroll_direction, scroll_speed)
         resetSigns()
 
     def zoomFingersTgt():
-        # if recentSign == hand_sign_index[zoomFingersApart]:
-        # zoomIn()
+        nonlocal apartTriggered, tgtTriggered
+        tgtTriggered = True
+        if apartTriggered:
+            pyag.hotkey('ctrl', '-')  # Zoom out
+            tgtTriggered = False
+            apartTriggered = False
         resetSigns()
 
     def zoomFingersApart():
-        # if recentSign == hand_sign_index[zoomFingersTgt]:
-        # zoomOut()
+        nonlocal apartTriggered, tgtTriggered
+        apartTriggered = True
+        if tgtTriggered:
+            pyag.hotkey('ctrl', '+')  # Zoom in
+            tgtTriggered = False
+            apartTriggered = False
         resetSigns()
 
     def clickDown():
@@ -252,15 +238,7 @@ def main():
             # Hold down the click when all other fingertips are close
             pyag.mouseDown()
             click_triggered = True
-        pointSign()
-
-    def clickUp():
-        nonlocal click_triggered
-        if click_triggered:
-            # Release the click when fingers move apart
-            pyag.mouseUp()
-            click_triggered = False
-        pointSign()
+        cursorFollow()
 
     # Sign Functions _____________________________________________
     hand_sign_functions = {
@@ -277,8 +255,7 @@ def main():
         10: scrollHandUp,
         11: zoomFingersTgt,
         12: zoomFingersApart,
-        13: clickDown,
-        14: clickUp
+        13: clickDown
     }
 
     hand_sign_index = {value: key for key,
@@ -310,6 +287,47 @@ def main():
                         int(direction*speed), _pause=False)
                     toScroll = False
                     t.sleep(0.01)
+
+    def cursorFollow():
+        nonlocal cursor_position, alpha, scaling
+
+        index_tip = hand_landmarks.landmark[8]  # Index fingertip landmark
+        index_tip_x = int(index_tip.x * image.shape[1])
+        index_tip_y = int(index_tip.y * image.shape[0])
+
+        # Map the fingertip position to the screen coordinates
+        screen_x = int(index_tip_x * screen_width / image.shape[1])
+        screen_y = int(index_tip_y * screen_height / image.shape[0])
+
+        # Apply EMA to smooth the cursor position
+        new_x, new_y = screen_x, screen_y
+        cursor_position = (
+            int((1 - alpha) * cursor_position[0] + alpha * new_x),
+            int((1 - alpha) * cursor_position[1] + alpha * new_y)
+        )
+
+        # Translate origin to center of screen
+        cursor_position = (
+            int(cursor_position[0] - screen_width/2),
+            int(cursor_position[1] - screen_height/2)
+        )
+
+        # Scaling, preserve sign
+        if (cursor_position[0] != 0 and cursor_position[1] != 0):
+            cursor_position = (min(
+                screen_width/2, abs(scaling*cursor_position[0]))*((scaling*cursor_position[0])/abs(scaling*cursor_position[0])), min(screen_height/2, abs(scaling*cursor_position[1]))*((scaling*cursor_position[1])/abs(scaling*cursor_position[1])))
+
+        # Translate origin back to top left
+        cursor_position = (
+            int(cursor_position[0] + screen_width/2),
+            int(cursor_position[1] + screen_height/2)
+        )
+
+        # Move the cursor to the fingertip position
+        pyag.moveTo(cursor_position[0], cursor_position[1], _pause=False)
+
+        point_history.append(landmark_list[8])
+        resetSigns()
 
     while True:
         fps = cvFpsCalc.get()
@@ -368,9 +386,10 @@ def main():
                 # Triggers hand sign functions
                 hand_sign_functions[hand_sign_id]()
 
-                if (recentSigns[1] != hand_sign_id):
-                    recentSigns[0] = recentSigns[1]
-                    recentSigns[1] = hand_sign_id
+                if (recentSigns[-1] != hand_sign_id):
+                    recentSigns.append(hand_sign_id)
+                    recentSigns.pop(0)
+
                 # point_history.append(landmark_list[8])
 
                 # Hand Actions______________________________________________________________
