@@ -68,10 +68,17 @@ def main():
     domainTriggered = False
     konTriggered = False
     click_triggered = False
+
+    new_scroll_cycle = True
+
+    new_zoom_cycle = True
     apartTriggered = False
     tgtTriggered = False
-    zoomed = False
-    shrunk = False
+
+    # Trigger Times
+    last_tgt_trigger_time = 0
+    last_apart_trigger_time = 0
+    interval_threshold = 2  # seconds
 
     # Action Hold/Pause Variables ______________________________________
     hold = [0]*NUM_SIGNS
@@ -117,7 +124,7 @@ def main():
 
     # Program Variables ________________________________________________
     # History
-    recentSigns = [0]*4
+    recentSigns = [0]*2
     history_length = 32
     point_history = deque(maxlen=history_length)
 
@@ -130,13 +137,16 @@ def main():
 
     # Sign Functions__________________________________________________
     def resetSigns():
-        nonlocal histColour, histSize, histBorder, hold, domainTriggered, konTriggered, click_triggered
+        nonlocal histColour, histSize, histBorder, hold, domainTriggered, konTriggered, click_triggered, new_scroll_cycle, new_zoom_cycle
         histColour = (152, 251, 152)
         histSize = 1
         histBorder = 2
         hold = [0 for _ in hold]
-        click_triggered = False
-        pyag.mouseUp()
+        new_scroll_cycle = True
+        new_zoom_cycle = True
+        if click_triggered:
+            click_triggered = False
+            pyag.mouseUp()
         if handedness.classification[0].label[0:] == "Right":
             domainTriggered = False
             konTriggered = False
@@ -205,32 +215,39 @@ def main():
         hold[hand_sign_id] += 1
 
     def scrollHandDown():
-        if recentSigns[-2] == hand_sign_index[scrollHandUp] and toScroll:
+        if recentSigns[0] == hand_sign_index[scrollHandUp] and toScroll and new_scroll_cycle:
             scroll(scroll_direction, scroll_speed)
-        resetSigns()
 
     def scrollHandUp():
-        if recentSigns[-2] == hand_sign_index[scrollHandDown] and toScroll:
+        if recentSigns[0] == hand_sign_index[scrollHandDown] and toScroll and new_scroll_cycle:
             scroll(scroll_direction, scroll_speed)
-        resetSigns()
 
     def zoomFingersTgt():
-        nonlocal apartTriggered, tgtTriggered
-        tgtTriggered = True
-        if apartTriggered:
-            pyag.hotkey('ctrl', '-')  # Zoom out
-            tgtTriggered = False
-            apartTriggered = False
-        resetSigns()
+        nonlocal apartTriggered, tgtTriggered, last_tgt_trigger_time, new_zoom_cycle
+        current_time = t.time()
+
+        if new_zoom_cycle:
+            tgtTriggered = True
+            if apartTriggered and (current_time - last_apart_trigger_time) <= interval_threshold:
+                pyag.hotkey('ctrl', '-')  # Zoom out
+                tgtTriggered = False
+                apartTriggered = False
+                new_zoom_cycle = False
+
+        last_tgt_trigger_time = current_time
 
     def zoomFingersApart():
-        nonlocal apartTriggered, tgtTriggered
-        apartTriggered = True
-        if tgtTriggered:
-            pyag.hotkey('ctrl', '+')  # Zoom in
-            tgtTriggered = False
-            apartTriggered = False
-        resetSigns()
+        nonlocal apartTriggered, tgtTriggered, last_apart_trigger_time, new_zoom_cycle
+        current_time = t.time()
+        if new_zoom_cycle:
+            apartTriggered = True
+            if tgtTriggered and (current_time - last_tgt_trigger_time) <= interval_threshold:
+                pyag.hotkey('ctrl', '+')  # Zoom in
+                tgtTriggered = False
+                apartTriggered = False
+                new_zoom_cycle = False
+
+        last_apart_trigger_time = current_time
 
     def clickDown():
         nonlocal click_triggered
@@ -278,7 +295,8 @@ def main():
     }
 
     def scroll(direction, speed):
-        nonlocal toScroll
+        nonlocal toScroll, new_scroll_cycle
+        new_scroll_cycle = False
 
         if toScroll:
             if direction != 0:
@@ -327,7 +345,6 @@ def main():
         pyag.moveTo(cursor_position[0], cursor_position[1], _pause=False)
 
         point_history.append(landmark_list[8])
-        resetSigns()
 
     while True:
         fps = cvFpsCalc.get()
